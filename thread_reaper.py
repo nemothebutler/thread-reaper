@@ -5,9 +5,10 @@ Thread Reaper — automatically closes inactive Discord threads.
 Behavior:
 - Scans all threads tracked in discord_threads.json
 - For each thread, checks the last message timestamp (ignoring reaper warnings/closings)
-- If inactive for >= INACTIVITY_MINUTES, sends a farewell message and archives it
-- Tracks which threads have been warned vs closed to avoid duplicate actions
-- Once warned, the next run will close the thread (unless a human sent a message)
+- Phase 1: After 30 min of inactivity → sends a warning with the closure deadline (UTC+8)
+- Phase 2: After 60 min of inactivity → closes the thread
+- If a human sends a message after the warning, the warning state is cleared
+- Runs every 30 minutes via cron
 """
 
 import json
@@ -20,7 +21,8 @@ from pathlib import Path
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes"))
 THREADS_FILE = HERMES_HOME / "discord_threads.json"
 REAPER_STATE_FILE = HERMES_HOME / "thread_reaper_state.json"
-INACTIVITY_MINUTES = int(os.environ.get("THREAD_REAPER_MINUTES", "15"))
+WARN_MINUTES = int(os.environ.get("THREAD_REAPER_WARN_MINUTES", "30"))
+CLOSE_MINUTES = int(os.environ.get("THREAD_REAPER_CLOSE_MINUTES", "60"))
 
 # Load bot token
 env_path = HERMES_HOME / ".env"
@@ -62,7 +64,9 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 NOW = datetime.now(timezone.utc)
-INACTIVITY_THRESHOLD = timedelta(minutes=INACTIVITY_MINUTES)
+WARN_THRESHOLD = timedelta(minutes=WARN_MINUTES)
+CLOSE_THRESHOLD = timedelta(minutes=CLOSE_MINUTES)
+UTC8 = timezone(timedelta(hours=8))
 closed_count = 0
 warned_count = 0
 skipped_count = 0
@@ -122,8 +126,22 @@ async def process_threads():
                 skipped_count += 1
                 continue
 
-            # If already warned, close it on this run
+            # If already warned, check if we should close (1 hour total) or still waiting
             if state_status == "warned":
+                warned_at_str = state.get("warned_at")
+                if warned_at_str:
+                    # Re-check last activity to see if someone posted after warning
+                    last_activity2, _ = await get_last_activity(channel)
+                    inactive_for2 = NOW - last_activity2 if last_activity2 else CLOSE_THRESHOLD
+
+                    # If someone posted recently (within 30 min), cancel warning
+                    if inactive_for2 < WARN_THRESHOLD:
+                        del reaper_state[str(thread_id)]
+                        skipped_count += 1
+                        print(f"CANCELLED WARNING: thread {thread_id} ({channel.name}) — new activity")
+                        continue
+
+                # Close the thread
                 try:
                     await channel.send(
                         "🔒 Closing this thread due to inactivity. "
@@ -148,13 +166,17 @@ async def process_threads():
 
             inactive_for = NOW - last_activity
 
-            if inactive_for >= INACTIVITY_THRESHOLD:
-                # Warn the thread
+            if inactive_for >= WARN_THRESHOLD and inactive_for < CLOSE_THRESHOLD:
+                # Warn the thread — calculate deadline in UTC+8
+                deadline_utc = last_activity + CLOSE_THRESHOLD
+                deadline_utc8 = deadline_utc.astimezone(UTC8)
+                time_str = deadline_utc8.strftime("%H:%M")
                 try:
                     await channel.send(
-                        "⏰ This thread has been inactive for over an hour. "
-                        "I'll close it shortly to keep things tidy. "
-                        "Just send a message if you'd like to keep it open!"
+                        f"⏰ This thread has been quiet for a while. "
+                        f"If there's no further activity by **{time_str} (UTC+8)**, "
+                        f"I'll close it to keep things tidy. "
+                        f"Speak up if you'd like to keep it open!"
                     )
                     reaper_state[str(thread_id)] = {
                         "status": "warned",
@@ -167,6 +189,22 @@ async def process_threads():
                     print(f"FORBIDDEN: cannot message thread {thread_id}")
                 except Exception as e:
                     print(f"ERROR warning thread {thread_id}: {e}")
+            elif inactive_for >= CLOSE_THRESHOLD:
+                # Past close threshold without warning (edge case) — close directly
+                try:
+                    await channel.send(
+                        "🔒 Closing this thread due to prolonged inactivity. "
+                        "Feel free to open a new one if you need anything!"
+                    )
+                    await channel.edit(archived=True, reason="Auto-archived: 1 hour of inactivity")
+                    if str(thread_id) in reaper_state:
+                        del reaper_state[str(thread_id)]
+                    closed_count += 1
+                    print(f"CLOSED (direct): thread {thread_id} ({channel.name})")
+                except discord.Forbidden:
+                    print(f"FORBIDDEN: cannot close thread {thread_id}")
+                except Exception as e:
+                    print(f"ERROR closing thread {thread_id}: {e}")
             else:
                 # Thread is active — clear any warning state
                 if str(thread_id) in reaper_state:
@@ -188,7 +226,7 @@ async def process_threads():
 async def on_ready():
     global closed_count, warned_count, skipped_count
     print(f"Thread Reaper connected as {client.user}")
-    print(f"Checking {len(tracked_threads)} tracked threads (threshold: {INACTIVITY_MINUTES} min)")
+    print(f"Checking {len(tracked_threads)} tracked threads (warn: {WARN_MINUTES}m, close: {CLOSE_MINUTES}m)")
     await process_threads()
     print(f"\nDone! warned={warned_count} closed={closed_count} skipped={skipped_count}")
     await client.close()
