@@ -20,7 +20,7 @@ from pathlib import Path
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes"))
 THREADS_FILE = HERMES_HOME / "discord_threads.json"
 REAPER_STATE_FILE = HERMES_HOME / "thread_reaper_state.json"
-INACTIVITY_MINUTES = int(os.environ.get("THREAD_REAPER_MINUTES", "60"))
+INACTIVITY_MINUTES = int(os.environ.get("THREAD_REAPER_MINUTES", "15"))
 
 # Load bot token
 env_path = HERMES_HOME / ".env"
