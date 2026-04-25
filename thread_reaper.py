@@ -4,7 +4,7 @@ Thread Reaper — automatically closes inactive Discord threads.
 
 Behavior:
 - Scans all threads tracked in discord_threads.json
-- For each thread, checks the last non-bot message timestamp
+- For each thread, checks the last message timestamp (ignoring reaper warnings/closings)
 - If inactive for >= INACTIVITY_MINUTES, sends a farewell message and archives it
 - Tracks which threads have been warned vs closed to avoid duplicate actions
 - Once warned, the next run will close the thread (unless a human sent a message)
@@ -68,17 +68,30 @@ warned_count = 0
 skipped_count = 0
 
 
-async def get_last_human_activity(thread):
-    """Get the timestamp of the last non-bot message in a thread.
-    Returns (timestamp, author) or falls back to thread creation time.
+# Markers that identify reaper system messages (warning + closing)
+REAPER_MARKERS = ("⏰", "🔒")
+
+
+def is_reaper_message(msg):
+    """Check if a message is a reaper system message (warning or closing)."""
+    return (
+        msg.author.id == client.user.id
+        and any(msg.content.startswith(marker) for marker in REAPER_MARKERS)
+    )
+
+
+async def get_last_activity(thread):
+    """Get the timestamp of the last real activity in a thread.
+    Ignores reaper system messages (warnings/closings) only.
+    Falls back to thread creation time if no real messages found.
     """
     async for msg in thread.history(limit=50):
-        if msg.author.id != client.user.id:
+        if not is_reaper_message(msg):
             ts = msg.created_at
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
             return ts, msg.author
-    # No human messages — use thread creation time
+    # No real messages found — use thread creation time
     created = thread.created_at
     if created.tzinfo is None:
         created = created.replace(tzinfo=timezone.utc)
@@ -126,8 +139,8 @@ async def process_threads():
                     print(f"ERROR closing thread {thread_id}: {e}")
                 continue
 
-            # Get last human activity (ignore bot's own messages)
-            last_activity, last_author = await get_last_human_activity(channel)
+            # Get last real activity (ignore reaper warning/closing messages only)
+            last_activity, last_author = await get_last_activity(channel)
 
             if last_activity is None:
                 skipped_count += 1
