@@ -5,10 +5,10 @@ Thread Reaper — automatically closes inactive Discord threads.
 Behavior:
 - Scans all threads tracked in discord_threads.json
 - For each thread, checks the last message timestamp (ignoring reaper warnings/closings)
-- Phase 1: After 30 min of inactivity → sends a warning with the closure deadline (UTC+8)
-- Phase 2: After 60 min of inactivity → closes the thread
+- Phase 1: After 5 hours of inactivity → sends a warning with the closure deadline (UTC+8)
+- Phase 2: After 8 hours of inactivity → closes the thread
 - If a human sends a message after the warning, the warning state is cleared
-- Runs every 30 minutes via cron
+- Runs every hour via cron
 """
 
 import json
@@ -21,8 +21,8 @@ from pathlib import Path
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes"))
 THREADS_FILE = HERMES_HOME / "discord_threads.json"
 REAPER_STATE_FILE = HERMES_HOME / "thread_reaper_state.json"
-WARN_MINUTES = int(os.environ.get("THREAD_REAPER_WARN_MINUTES", "30"))
-CLOSE_MINUTES = int(os.environ.get("THREAD_REAPER_CLOSE_MINUTES", "60"))
+WARN_MINUTES = int(os.environ.get("THREAD_REAPER_WARN_MINUTES", "300"))
+CLOSE_MINUTES = int(os.environ.get("THREAD_REAPER_CLOSE_MINUTES", "480"))
 
 # Load bot token
 env_path = HERMES_HOME / ".env"
@@ -134,7 +134,7 @@ async def process_threads():
                     last_activity2, _ = await get_last_activity(channel)
                     inactive_for2 = NOW - last_activity2 if last_activity2 else CLOSE_THRESHOLD
 
-                    # If someone posted recently (within 30 min), cancel warning
+                    # If someone posted recently (within 5 hours), cancel warning
                     if inactive_for2 < WARN_THRESHOLD:
                         del reaper_state[str(thread_id)]
                         skipped_count += 1
@@ -147,7 +147,7 @@ async def process_threads():
                         "🔒 Closing this thread due to inactivity. "
                         "Feel free to open a new one if you need anything!"
                     )
-                    await channel.edit(archived=True, reason="Auto-archived: 1 hour of inactivity")
+                    await channel.edit(archived=True, reason="Auto-archived: 8 hours of inactivity")
                     del reaper_state[str(thread_id)]
                     closed_count += 1
                     print(f"CLOSED: thread {thread_id} ({channel.name})")
@@ -196,7 +196,7 @@ async def process_threads():
                         "🔒 Closing this thread due to prolonged inactivity. "
                         "Feel free to open a new one if you need anything!"
                     )
-                    await channel.edit(archived=True, reason="Auto-archived: 1 hour of inactivity")
+                    await channel.edit(archived=True, reason="Auto-archived: 8 hours of inactivity")
                     if str(thread_id) in reaper_state:
                         del reaper_state[str(thread_id)]
                     closed_count += 1
