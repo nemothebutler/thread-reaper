@@ -138,7 +138,6 @@ async def process_threads():
                     if inactive_for2 < WARN_THRESHOLD:
                         del reaper_state[str(thread_id)]
                         skipped_count += 1
-                        print(f"CANCELLED WARNING: thread {thread_id} ({channel.name}) — new activity")
                         continue
 
                 # Close the thread
@@ -225,10 +224,11 @@ async def process_threads():
 @client.event
 async def on_ready():
     global closed_count, warned_count, skipped_count
-    print(f"Thread Reaper connected as {client.user}")
-    print(f"Checking {len(tracked_threads)} tracked threads (warn: {WARN_MINUTES}m, close: {CLOSE_MINUTES}m)")
     await process_threads()
-    print(f"\nDone! warned={warned_count} closed={closed_count} skipped={skipped_count}")
+
+    # Only notify if something actually happened
+    if warned_count > 0 or closed_count > 0:
+        print(f"Thread Reaper: warned={warned_count} closed={closed_count}")
     await client.close()
 
 
