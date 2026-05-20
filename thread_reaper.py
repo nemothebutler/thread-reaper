@@ -126,34 +126,45 @@ async def process_threads():
                 skipped_count += 1
                 continue
 
-            # If already warned, check if we should close (1 hour total) or still waiting
+            # If already warned, check if we should close or still waiting
             if state_status == "warned":
-                warned_at_str = state.get("warned_at")
-                if warned_at_str:
-                    # Re-check last activity to see if someone posted after warning
-                    last_activity2, _ = await get_last_activity(channel)
-                    inactive_for2 = NOW - last_activity2 if last_activity2 else CLOSE_THRESHOLD
+                consecutive_warns = state.get("consecutive_warns", 1)
 
-                    # If someone posted recently (within 5 hours), cancel warning
-                    if inactive_for2 < WARN_THRESHOLD:
-                        del reaper_state[str(thread_id)]
-                        skipped_count += 1
-                        continue
+                # Re-check last activity to see if someone posted after warning
+                last_activity2, _ = await get_last_activity(channel)
+                inactive_for2 = NOW - last_activity2 if last_activity2 else CLOSE_THRESHOLD
 
-                # Close the thread
-                try:
-                    await channel.send(
-                        "🔒 Closing this thread due to inactivity. "
-                        "Feel free to open a new one if you need anything!"
-                    )
-                    await channel.edit(archived=True, reason="Auto-archived: 8 hours of inactivity")
+                # If someone posted recently (within 5 hours), cancel warning and reset
+                if inactive_for2 < WARN_THRESHOLD:
                     del reaper_state[str(thread_id)]
-                    closed_count += 1
-                    print(f"CLOSED: thread {thread_id} ({channel.name})")
-                except discord.Forbidden:
-                    print(f"FORBIDDEN: cannot close thread {thread_id}")
-                except Exception as e:
-                    print(f"ERROR closing thread {thread_id}: {e}")
+                    skipped_count += 1
+                    continue
+
+                # After 3 consecutive warnings without activity, close the thread
+                if consecutive_warns >= 3:
+                    try:
+                        await channel.send(
+                            "🔒 Closing this thread due to inactivity. "
+                            "Feel free to open a new one if you need anything!"
+                        )
+                        await channel.edit(archived=True, reason="Auto-archived: 8 hours of inactivity")
+                        del reaper_state[str(thread_id)]
+                        closed_count += 1
+                        print(f"CLOSED: thread {thread_id} ({channel.name})")
+                    except discord.Forbidden:
+                        print(f"FORBIDDEN: cannot close thread {thread_id}")
+                    except Exception as e:
+                        print(f"ERROR closing thread {thread_id}: {e}")
+                    continue
+
+                # Increment consecutive warn counter (silently, no message sent)
+                reaper_state[str(thread_id)] = {
+                    "status": "warned",
+                    "warned_at": NOW.isoformat(),
+                    "thread_name": channel.name,
+                    "consecutive_warns": consecutive_warns + 1,
+                }
+                skipped_count += 1
                 continue
 
             # Get last real activity (ignore reaper warning/closing messages only)
@@ -181,6 +192,7 @@ async def process_threads():
                         "status": "warned",
                         "warned_at": NOW.isoformat(),
                         "thread_name": channel.name,
+                        "consecutive_warns": 1,
                     }
                     warned_count += 1
                     print(f"WARNED: thread {thread_id} ({channel.name}) — inactive for {inactive_for}")
